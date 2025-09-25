@@ -1,0 +1,792 @@
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>客戶對帳單產生器</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link href="https://fonts.googleapis.com" rel="preconnect"/>
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&amp;display=swap" rel="stylesheet"/>
+<style>
+        body {
+            font-family: 'Noto Sans TC', sans-serif;
+        }
+        /* 列印樣式 */
+        @media print {
+            body {
+                -webkit-print-color-adjust: exact;
+                print-color-adjust: exact;
+            }
+            .no-print {
+                display: none !important;
+            }
+            .printable-area {
+                box-shadow: none !important;
+                margin: 0 !important;
+                padding: 0 !important;
+                border: none !important;
+                font-size: 10pt; /* Adjust print font size */
+            }
+            [contenteditable="true"], [contenteditable="false"], input, select {
+                border-color: transparent !important;
+                background-color: transparent !important;
+                -webkit-appearance: none;
+                -moz-appearance: none;
+                appearance: none;
+            }
+            input[type="date"]::-webkit-calendar-picker-indicator {
+                display: none;
+            }
+            .item-row:hover {
+                background-color: transparent !important;
+            }
+        }
+        [contenteditable="true"]:focus, input:focus, select:focus {
+            outline: none;
+            border-color: #3b82f6; /* Tailwind's blue-500 */
+            box-shadow: 0 0 0 1px #3b82f6;
+        }
+        [contenteditable="true"], input[type="number"], input[type="date"], select, .custom-item-input {
+            padding: 4px 8px;
+            border-radius: 4px;
+            border: 1px dashed #d1d5db; /* Tailwind's gray-300 */
+            transition: all 0.2s ease-in-out;
+        }
+        .item-row:hover {
+             background-color: #f9fafb; /* gray-50 */
+        }
+        [contenteditable="false"].quantity,
+        [contenteditable="false"] {
+            background-color: #f3f4f6; /* gray-100 */
+            color: #6b7280; /* gray-500 */
+            cursor: not-allowed;
+        }
+    </style>
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+    const fields = document.querySelectorAll("input, textarea, select");
+    fields.forEach(field => {
+        const key = "autosave_" + field.name;
+        if (localStorage.getItem(key)) {
+            field.value = localStorage.getItem(key);
+        }
+        field.addEventListener("input", () => {
+            localStorage.setItem(key, field.value);
+        });
+    });
+});
+</script>
+<link href="manifest.json" rel="manifest"/>
+<script>
+if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('service-worker.js')
+    .then(() => console.log("Service Worker Registered"));
+}
+</script>
+<style>
+input.invalid {
+  border: 2px solid red;
+}
+.error-message {
+  color: red;
+  font-size: 0.9em;
+  display: none;
+}
+</style></head>
+<body class="bg-gray-100"><button class="print-preview-button" id="print-preview-btn" onclick="window.print()">預覽列印</button><button class="export-pdf-button" id="export-pdf-btn" onclick="exportToPDF()">匯出 PDF</button>
+<div class="container mx-auto p-4 sm:p-8">
+<!-- 控制面板 -->
+<div class="no-print mb-6 p-4 bg-white rounded-lg shadow-md flex flex-col sm:flex-row justify-between items-center space-y-4 sm:space-y-0 flex-wrap">
+<div class="flex items-center space-x-2">
+<label class="text-gray-700 font-medium whitespace-nowrap" for="exchangeRate">日幣匯率 (JPY → TWD):</label>
+<input class="w-28 bg-gray-50 border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block p-2" id="exchangeRate" inputmode="numeric" min="0" oninput="validateNonNegative(this)" step="0.001" type="number" value="0.215"/>
+</div>
+<div class="flex items-center space-x-4">
+<label class="flex items-center space-x-2 cursor-pointer">
+<input checked="" class="h-5 w-5 text-blue-600 rounded focus:ring-blue-500" id="toggleMileslines" type="checkbox"/>
+<span class="text-gray-700">本期有紡織助劑</span>
+</label>
+<label class="flex items-center space-x-2 cursor-pointer">
+<input checked="" class="h-5 w-5 text-purple-600 rounded focus:ring-purple-500" id="toggleToshin" type="checkbox"/>
+<span class="text-gray-700">本期有設備零組件</span>
+</label>
+</div>
+<button class="w-full sm:w-auto bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-6 rounded-lg shadow transition-transform transform hover:scale-105" onclick="window.print()">
+                🖨️ 列印此頁
+            </button>
+</div>
+<!-- 對帳單區域 -->
+<div class="printable-area bg-white p-6 sm:p-8 rounded-lg shadow-xl text-sm" id="statement">
+<header class="text-center mb-6">
+<h1 class="text-2xl sm:text-3xl font-bold text-gray-800 tracking-wider" id="statement-title">客戶對帳單</h1>
+<p class="text-lg text-gray-500 mt-1" id="statement-month"></p>
+</header>
+<!-- 公司與客戶資訊 -->
+<div class="grid grid-cols-1 md:grid-cols-2 gap-8 mb-8">
+<!-- 我方資訊 -->
+<div class="space-y-1">
+<h2 class="text-base font-semibold border-b pb-2 mb-2 text-gray-700">開立單位</h2>
+<div class="flex items-center space-x-3">
+<!-- SVG Logo -->
+<div class="no-print">
+<svg enable-background="new 0 0 240 240" height="50" version="1.1" viewbox="0 0 240 240" width="50" xml:space="preserve" xmlns="http://www.w3.org/2000/svg">
+<g>
+<title>Layer 1</title>
+<path d="m217.50521,156.63779c-9.83042,9.14591 -19.38131,18.06324 -28.95746,26.95334c-2.23915,2.07874 -4.08286,1.43727 -6.19814,-0.58523c-12.98315,-12.41365 -25.01532,-26.17441 -39.42776,-36.64649c-15.99652,-11.62304 -34.01875,-20.74533 -53.65993,-25.27034c-8.53183,-1.9656 -17.38984,-2.56132 -26.12085,-3.60173c-6.83691,-0.81471 -13.70468,-1.37462 -20.56208,-2.01184c-4.11346,-0.38226 -4.22912,-2.7047 -2.32231,-5.38225c54.91974,-44.1298 62.69379,-44.44441 70.45951,-44.5809c13.26746,-0.23319 25.94275,2.87785 38.32783,7.34586c8.55135,3.08495 17.13845,6.0854 25.59545,9.41362c11.80534,4.64595 22.29765,11.6002 31.70862,19.97169c8.86714,7.88774 17.44178,16.09242 23.26733,26.80707c2.25809,4.1532 2.06006,7.33803 -0.36459,10.85898c-3.79802,5.5152 -7.64756,10.99493 -11.74562,16.72822z" fill="#0A17FF" id="svg_2"></path>
+<path d="m172.07539,198.23332c-0.1506,5.87685 -3.80175,9.36592 -9.13589,9.84476c-11.70952,1.05113 -21.64467,-3.90459 -31.38739,-9.18739c-15.77178,-8.55202 -29.54588,-19.78557 -41.26887,-33.31403c-7.83316,-9.03958 -14.9046,-18.7392 -21.91661,-27.63556c-2.33374,8.52312 -2.51499,8.61662 4.62949,22.46437c3.49817,6.78026 7.81423,13.13855 12.19439,20.40863c-8.42984,7.9978 -17.22689,16.24892 -25.91092,24.61733c-5.51324,5.31288 -10.84361,10.81508 -16.28418,16.20391c-3.62337,3.58892 -8.78339,3.62659 -12.04669,-0.30638c-9.43325,-11.36918 -17.24642,-23.8415 -22.67373,-37.55693c-2.59231,-6.55105 -4.80848,-13.76445 -4.87023,-20.69856c-0.13673,-15.35342 7.00889,-26.78456 23.47569,-32.03435c12.70093,-4.04918 25.6542,-2.3551 38.02701,0.32317c19.45851,4.21213 38.78839,9.82921 56.15593,19.88118c11.24858,6.51043 21.74444,14.46251 31.97875,22.52842c5.65162,4.45417 10.26441,10.31032 14.94545,15.87122c1.9074,2.2659 2.75435,5.42445 4.0878,8.59021z" fill="#0A17FF" id="svg_3"></path>
+<path d="m143.37626,60.00668c-12.23563,5.35065 -26.0761,3.95385 -20.31647,-2.61959c20.97804,-45.23607 73.61259,-45.95906 93.40516,-41.46369c19.79256,4.49536 8.24643,2.23974 12.26544,3.65553l-85.35413,40.42775z" fill="#FF0101" id="svg_4" stroke="null"></path>
+</g>
+</svg>
+</div>
+<div class="text-lg font-bold">明聯股份有限公司</div>
+</div>
+<div class="text-xs text-gray-600">106415 臺北市大安區敦化南路二段59號18樓</div>
+<div class="text-xs text-gray-600">統一編號：20779196</div>
+<div class="text-xs text-gray-600">電話：(02)2708-2300  傳真：(02)2709-0777</div>
+<div class="text-xs text-gray-600">電郵：Thickener@mileslines.ml</div>
+<div class="text-xs text-gray-600">聯絡人：陳小姐</div>
+</div>
+<!-- 客戶資訊 -->
+<div class="space-y-2">
+<h2 class="text-base font-semibold border-b pb-2 mb-2 text-gray-700">客戶資料</h2>
+<select class="no-print bg-gray-50 border-gray-300 text-gray-900 text-sm rounded-lg p-1 w-full mb-2" id="customer-select"></select>
+<div class="text-lg font-bold" id="customer-name">客戶全銜</div>
+<div class="text-xs text-gray-600" id="customer-address">帳單地址：</div>
+<div class="flex items-center text-xs">
+<span class="font-medium text-gray-500 w-14">統一編號：</span>
+<div class="text-gray-600 flex-1" id="customer-taxId"></div>
+</div>
+<div class="flex items-center text-xs">
+<span class="font-medium text-gray-500 w-14">電話：</span>
+<div class="text-gray-600 flex-1" id="customer-phone"></div>
+</div>
+</div>
+</div>
+<!-- 日期與單號 -->
+<div class="flex justify-end space-x-8 mb-6 text-xs text-gray-600">
+<div class="flex items-center space-x-2">
+<strong class="text-gray-800">對帳單日期：</strong>
+<input class="bg-gray-50 border-gray-300 text-gray-900 text-xs rounded-lg p-1" id="statement-date" type="date"/>
+</div>
+</div>
+<!-- 紡織助劑 -->
+<div class="mb-8" id="mileslines-section">
+<h3 class="text-lg font-semibold text-gray-800 mb-3 border-b-2 border-blue-500 pb-2">紡織助劑</h3>
+<div class="overflow-x-auto">
+<table class="w-full text-left border-collapse mb-4" id="mileslines-items-table">
+<thead class="bg-gray-100 border-b-2 border-gray-300">
+<tr>
+<th class="p-2 text-xs font-semibold text-gray-700 tracking-wider" style="width: 20%;">日期</th>
+<th class="p-2 text-xs font-semibold text-gray-700 tracking-wider" style="width: 35%;">品項 / 說明</th>
+<th class="p-2 text-xs font-semibold text-gray-700 tracking-wider text-right" style="width: 15%;">數量(KG)</th>
+<th class="p-2 text-xs font-semibold text-gray-700 tracking-wider" style="width: 15%;">單價 (NT$)</th>
+<th class="p-2 text-xs font-semibold text-gray-700 tracking-wider" style="width: 15%;">小計 (NT$)</th>
+<th class="p-2 w-10 no-print"></th>
+</tr>
+</thead>
+<tbody><!-- 紡織助劑 --></tbody>
+</table>
+</div>
+<button class="no-print bg-green-500 hover:bg-green-600 text-white text-xs font-bold py-1 px-3 rounded-lg transition-transform transform hover:scale-105" id="add-mileslines-item-btn">
+                    + 新增一行紡織助劑
+                </button>
+<div class="flex justify-end mt-4">
+<div class="w-full md:w-2/3 lg:w-1/2 space-y-2 text-gray-700">
+<div class="flex justify-between items-center">
+<span>紡織助劑 (稅前)</span>
+<div class="flex justify-between font-medium text-gray-800 w-32 text-right">
+<span>NT$</span>
+<span id="mileslines-subtotal">0</span>
+</div>
+</div>
+<div class="flex justify-between items-center">
+<span>營業稅 (5%)</span>
+<div class="flex justify-between font-medium text-gray-800 w-32 text-right">
+<span>NT$</span>
+<span id="tax">0</span>
+</div>
+</div>
+<div class="flex justify-between items-center border-t pt-2 mt-1 font-semibold text-gray-800">
+<span>紡織助劑　合計</span>
+<div class="flex justify-between font-medium w-32 text-right">
+<span>NT$</span>
+<span id="mileslines-total">0</span>
+</div>
+</div>
+</div>
+</div>
+</div>
+<!-- 設備零組件項目 -->
+<div class="mb-8" id="toshin-section">
+<div class="flex justify-between items-end border-b-2 border-purple-500 pb-2 mb-3">
+<h3 class="text-lg font-semibold text-gray-800">設備零組件</h3>
+<div class="flex items-center space-x-4">
+<button class="no-print text-xs bg-purple-100 text-purple-700 hover:bg-purple-200 py-1 px-3 rounded-lg" id="view-parts-btn">點此查看設備零組件過往品項清單</button>
+<div class="text-xs text-gray-600">
+<span class="font-medium">結帳匯率：</span> 1 JPY = <span class="font-semibold text-purple-700" id="rate-display">0.215</span> TWD
+                        </div>
+</div>
+</div>
+<div class="overflow-x-auto">
+<table class="w-full text-left border-collapse mb-4" id="toshin-items-table">
+<thead class="bg-gray-100 border-b-2 border-gray-300">
+<tr>
+<th class="p-2 text-xs font-semibold text-gray-700 tracking-wider" style="width: 15%;">日期</th>
+<th class="p-2 text-xs font-semibold text-gray-700 tracking-wider" style="width: 25%;">品項 / 說明</th>
+<th class="p-2 text-xs font-semibold text-gray-700 tracking-wider text-right" style="width: 10%;">數量</th>
+<th class="p-2 text-xs font-semibold text-gray-700 tracking-wider text-right" style="width: 15%;">單價 (JP¥)</th>
+<th class="p-2 text-xs font-semibold text-gray-700 tracking-wider text-right" style="width: 15%;">小計 (JP¥)</th>
+<th class="p-2 text-xs font-semibold text-gray-700 tracking-wider" style="width: 20%;">小計 (NT$)</th>
+<th class="p-2 w-10 no-print"></th>
+</tr>
+</thead>
+<tbody><!-- 設備零組件項目 --></tbody>
+</table>
+</div>
+<button class="no-print bg-green-500 hover:bg-green-600 text-white text-xs font-bold py-1 px-3 rounded-lg transition-transform transform hover:scale-105" id="add-toshin-item-btn">
+                    + 新增一行設備零組件
+                </button>
+<div class="flex justify-end mt-4">
+<div class="w-full md:w-2/3 lg:w-1/2 space-y-2 text-gray-700">
+<div class="flex justify-between items-center border-t pt-2 font-semibold text-gray-800">
+<span>設備零組件 合計</span>
+<div class="flex justify-between font-medium w-32 text-right">
+<span>NT$</span>
+<span id="toshin-total">0</span>
+</div>
+</div>
+</div>
+</div>
+</div>
+<!-- 金額總計 -->
+<div class="flex justify-end mt-8">
+<div class="w-full md:w-2/3 lg:w-1/2">
+<div class="flex justify-between items-center border-t-2 border-gray-800 pt-2 text-base font-bold">
+<span class="text-gray-800">本期帳款總額</span>
+<div class="flex justify-between text-red-600 w-32 text-right">
+<span>NT$</span>
+<span id="grand-total">0</span>
+</div>
+</div>
+</div>
+</div>
+<!-- 備註與簽名 -->
+<div class="mt-12 text-sm text-gray-600">
+<h3 class="font-semibold text-gray-700 mb-2">備註事項：</h3>
+<div class="p-2 border rounded-md min-h-[80px]">
+<div id="note-item-1">一、技術服務相關零件設備，海關已於輸入時依營業稅法第41條代徵營業稅，貴公司得憑稅費收據扣抵營業稅。<br/><br/></div>
+<div>二、紡織助劑款項：支票受款人請開立為「明聯股份有限公司」<span id="note-item-2-toshin">；日本東伸相關款項部分，受款人則請開立『陳奕甫』，由其代理收付款項。</span><br/><br/></div>
+<div id="note-item-3">三、如對帳目內容或上述注意事項有所垂詢，請與本公司帳款聯絡人陳小姐聯繫。</div>
+</div>
+</div>
+<div class="mt-16 grid grid-cols-3 gap-8 text-center text-xs">
+<div>
+<div class="border-t-2 border-gray-300 pt-2">製表 Prepared by</div>
+</div>
+<div>
+<div class="border-t-2 border-gray-300 pt-2">確認 Confirmed by</div>
+</div>
+<div>
+<div class="border-t-2 border-gray-300 pt-2">核准 Approved by</div>
+</div>
+</div>
+</div>
+</div>
+<!-- Parts List Modal -->
+<div class="no-print fixed inset-0 bg-black bg-opacity-50 hidden items-center justify-center p-4" id="parts-modal">
+<div class="bg-white rounded-lg shadow-xl max-w-4xl w-full max-h-[80vh] overflow-y-auto">
+<div class="sticky top-0 bg-white p-4 border-b flex justify-between items-center">
+<h2 class="text-xl font-bold text-gray-800">東伸零組件品項參考</h2>
+<button class="text-gray-500 hover:text-gray-800 text-2xl" id="close-modal-btn">×</button>
+</div>
+<div class="p-6" id="modal-content">
+<!-- Content will be generated by JS -->
+</div>
+</div>
+</div>
+<script>
+    document.addEventListener('DOMContentLoaded', function () {
+
+        // =======================================================
+        // == 請在這裡編輯您的資料清單 ==
+        // =======================================================
+        const customerList = [
+            { name: "英勤布業有限公司全興廠", address: "509004 彰化縣伸港鄉全興工業區工東一路41號", taxId: "23690554", phone: "(04) 797-8089" },
+            { name: "翔逸貿易股份有限公司", address: "334019 桃園市八德區大興路110號14樓", taxId: "04243774", phone: "(03) 218-3944" },
+            { name: "富郁有限公司", address: "330477 桃園市桃園區龜山工業區興隆路9號", taxId: "83641467", phone: "(03) 362-5231" },
+            { name: "華城有限公司", address: "333024 桃園市龜山區海萍路16巷8之1號", taxId: "43783502", phone: "(03) 350-7016" },
+            { name: "新瑞倡企業股份有限公司", address: "333029 桃園市龜山區東舊路街100號", taxId: "07620770", phone: "(03) 329-4856" },
+            { name: "紡邑豐實業有限公司", address: "338013 桃園市蘆竹區宏竹里大竹北路331巷53號", taxId: "84794659", phone: "(03) 313-2885" },
+            { name: "紡裕豐股份有限公司", address: "338013 桃園市蘆竹區大竹北路331巷51號", taxId: "80013153", phone: "(03) 313-2885" },
+            { name: "興邦印染廠股份有限公司", address: "236044 新北市土城區福安街114號", taxId: "33420382", phone: "(02) 2268-1290" },
+            { name: "自行輸入", address: "", taxId: "", phone: "" }
+        ];
+
+        const mileslinesProductList = [
+            { description: '酒石酸', price: 70 },
+            { description: '糊料 MAX8', price: 160 },
+            { description: '豆糊 HS', price: 60 },
+            { description: '糊料 3A', price: 120 },
+            { description: '糊料 MY/12', price: 130 },
+            { description: '糊料 TA/12', price: 130 },
+            { description: '糊料 TA/8', price: 120 },
+            { description: '糊料 EXBA', price: 150 },
+            { description: '糊料 EX', price: 150 },
+            { description: '印花油', price: 280 },
+            { description: '印布油', price: 250 },
+            { description: '糊料 PAN NEW', price: 90 },
+            { description: '糊料 JOY/EXTRA', price: 70 },
+            { description: '自行輸入', price: 0 }
+        ];
+
+        const toshinServiceList = [
+            // 自動化控制
+            { category: "自動化控制", subCategory: "控制器", item: "控制器：定位控制器、序列控制器、時序控制器", examples: ["SQC-5", "SQC-6", "SQC-T2", "UD-F70", "FX3G-24M", "NAiS KT4", "FRC100A-G02", "JAMSC-B2605", "JAMSC-C389", "JAMSC-B1090B"] },
+            { category: "自動化控制", subCategory: "控制器", item: "控制器：運算模組", examples: ["Q01CPU", "Q02UCPU", "NC1P-EO", "DDSCR-U84S", "KEYENCE KZ-300", "KV-24AT", "FXIN-24MT"] },
+            { category: "自動化控制", subCategory: "控制器", item: "控制器：輸出入模組", examples: ["JAMSC-B2603", "JAMSC-B2605", "JAMSC-B2833", "KZ-C32X", "JAMSC-B2110A"] },
+            { category: "自動化控制", subCategory: "控制器", item: "控制器：類比模組", examples: ["Q64DAN", "JAMSC-B1054"] },
+            { category: "自動化控制", subCategory: "控制器", item: "控制器：通訊模組", examples: ["JAMSC-C8610", "網路模組: QJG1BT 11N 対応CC-Link", "FX2N-32CCL"] },
+            { category: "自動化控制", subCategory: "控制器", item: "控制器：電源模組", examples: ["Q62P", "S8VS-03024"] },
+            { category: "自動化控制", subCategory: "控制器", item: "控制器：基本模組", examples: [] },
+            { category: "自動化控制", subCategory: "驅動器", item: "伺服馬達驅動器(Servopack)", examples: ["SGDH-XXXX", "SGDV-XXXX", "SD2A-XXXX"] },
+            { category: "自動化控制", subCategory: "驅動器", item: "變頻器 (Inverter)", examples: ["FVR", "CIMR", "VF-S9"] },
+            { category: "自動化控制", subCategory: "人機介面", item: "觸控面板", examples: ["GP-4301", "GP-2400", "GT-1150"] },
+            { category: "自動化控制", subCategory: "感測器", item: "近接開關、旋轉編碼器, 測速發電機、光學感應器", examples: ["E2E-X8MD1", "HES-01", "RP-112-AC", "RE-010-DC"] },
+            { category: "自動化控制", subCategory: "電子元件", item: "繼電器、高壓電磁接觸器(HGR)、電磁轉換器、電阻", examples: ["HI-20EG"] },
+            { category: "自動化控制", subCategory: "電纜", item: "電纜、排線、連接器、插頭", examples: [] },
+            { category: "自動化控制", subCategory: "電子元件", item: "開關、按鈕、端子台", examples: ["SB-2NB/21", "U-84S", "PUL-10A-10U"] },			
+            { category: "自動化控制", subCategory: "電子元件", item: "電子零件：印刷電路板（PCB）、電阻、變壓器", examples: ["FVR3 7E9S-2TS", "FRN3.7C1S-2TS"] },
+			
+            // 機械與傳動
+            { category: "機械傳動", subCategory: "運動結構", item: "軸承與滑動件：滑動軸承", examples: ["Slide Shoe", "KRD065"] },
+            { category: "機械傳動", subCategory: "運動結構", item: "軸承與滑動件：滑軌", examples: ["Sliding Sleeve"] },
+            { category: "機械傳動", subCategory: "運動結構", item: "軸承與滑動件：推力軸承", examples: ["Thrust Bearing"] },
+            { category: "機械傳動", subCategory: "運動結構", item: "滾輪與皮帶：導輥、調整輥", examples: [] },
+            { category: "機械傳動", subCategory: "運動結構", item: "滾輪與皮帶：印花皮帶", examples: [] },
+            { category: "機械傳動", subCategory: "運動結構", item: "滾輪與皮帶：時規皮帶", examples: [] },
+            { category: "機械傳動", subCategory: "運動結構", item: "聯軸器與制動：聯軸器", examples: [] },
+            { category: "機械傳動", subCategory: "運動結構", item: "聯軸器與制動：電磁離合器及煞車蹄片", examples: ["Brake Shoe", "Brake Piece"] },
+            { category: "機械傳動", subCategory: "運動結構", item: "結構部件：連桿、軸、齒輪", examples: ["Lever"] },
+            { category: "機械傳動", subCategory: "運動輔助", item: "氣壓元件：氣缸、電磁閥、管線", examples: ["Air Cylinder", "Solenoid Valve SY5120-5MU-C6-F2"] },
+            { category: "機械傳動", subCategory: "運動輔助", item: "油壓元件：油壓泵, 油壓缸、油壓濾芯", examples: ["NCLFZ-15A", "Vane Pump PVB29-FR5-20-CMC-11-J", "Vane Pump SY5120-5MU-C6-F2", "Piston Pump  PVB29-FRS-20-CMC-11-JA"] },
+            { category: "機械傳動", subCategory: "輔助裝置", item: "調整裝置：型框調整裝置", examples: [] },
+            { category: "機械傳動", subCategory: "輔助裝置", item: "調整裝置：刻度筒", examples: ["7E9S-2TS", "圓形刻度筒", "四角型目盛筒"]},
+            { category: "機械傳動", subCategory: "輔助裝置", item: "調整裝置：彈簧、螺絲", examples: [] },
+            // 耗材與工具
+            { category: "耗材", subCategory: "生產耗材", item: "墨水、噴頭、墨管", examples: ["FJ-600", "SP8018 KBR", "SJ-540"] },
+            { category: "耗材", subCategory: "生產耗材", item: "網布：聚酯網、毛氈、輸送帶網", examples: [] },
+            { category: "耗材", subCategory: "維護耗材", item: "清潔用品：橡膠刮刀、清潔棒", examples: ["濾心: OFS-12-JA-10-J"] },
+            { category: "耗材", subCategory: "維護耗材", item: "其他耗材：碳刷、油封、橡膠板", examples: [] },
+            // Special Items
+            { category: "特殊項目", description: '運費', priceJPY: 0 },
+            { category: "特殊項目", description: '自行輸入', priceJPY: 0 }
+        ];
+        // =======================================================
+
+
+        const mileslinesTableBody = document.querySelector('#mileslines-items-table tbody');
+        const toshinTableBody = document.querySelector('#toshin-items-table tbody');
+        const addmileslinesItemBtn = document.getElementById('add-mileslines-item-btn');
+        const addtoshinItemBtn = document.getElementById('add-toshin-item-btn');
+        const exchangeRateInput = document.getElementById('exchangeRate');
+        const rateDisplay = document.getElementById('rate-display');
+
+        const statementDateInput = document.getElementById('statement-date');
+        const statementMonthEl = document.getElementById('statement-month');
+        
+        const toggleMileslines = document.getElementById('toggleMileslines');
+        const toggleToshin = document.getElementById('toggleToshin');
+        const mileslinesSection = document.getElementById('mileslines-section');
+        const toshinSection = document.getElementById('toshin-section');
+        
+        // Modal elements
+        const partsModal = document.getElementById('parts-modal');
+        const closeModalBtn = document.getElementById('close-modal-btn');
+        const viewPartsBtn = document.getElementById('view-parts-btn');
+        const modalContent = document.getElementById('modal-content');
+
+        // Note items
+        const noteItem1 = document.getElementById('note-item-1');
+        const noteItem2toshin = document.getElementById('note-item-2-toshin');
+        
+        // Customer Info Elements
+        const customerSelect = document.getElementById('customer-select');
+        const customerNameEl = document.getElementById('customer-name');
+        const customerAddressEl = document.getElementById('customer-address');
+        const customerTaxIdEl = document.getElementById('customer-taxId');
+        const customerPhoneEl = document.getElementById('customer-phone');
+
+        // Populate customer dropdown
+        customerList.forEach(customer => {
+            const option = document.createElement('option');
+            option.value = customer.name;
+            option.textContent = customer.name;
+            customerSelect.appendChild(option);
+        });
+
+        // Handle customer selection change
+        customerSelect.addEventListener('change', (e) => {
+            const selectedName = e.target.value;
+            const customerData = customerList.find(c => c.name === selectedName);
+
+            if (customerData) {
+                const isOther = selectedName === '自行輸入';
+                
+                customerNameEl.textContent = isOther ? '請手動輸入客戶名稱' : customerData.name;
+                customerAddressEl.textContent = customerData.address;
+                customerTaxIdEl.textContent = customerData.taxId;
+                customerPhoneEl.textContent = customerData.phone;
+                
+                customerNameEl.contentEditable = isOther;
+                customerAddressEl.contentEditable = isOther;
+                customerTaxIdEl.contentEditable = isOther;
+                customerPhoneEl.contentEditable = isOther;
+
+                [customerNameEl, customerAddressEl, customerTaxIdEl, customerPhoneEl].forEach(el => {
+                    el.classList.toggle('bg-gray-50', isOther);
+                });
+                
+                if (isOther) {
+                    customerNameEl.focus();
+                }
+            }
+        });
+
+        const updateBillingPeriodText = (dateStr) => {
+            const selectedDate = new Date(dateStr + 'T00:00:00');
+            const year = selectedDate.getFullYear();
+            const month = selectedDate.getMonth(); // 0-11
+            
+            statementMonthEl.textContent = `${year} 年 ${month + 1} 月`;
+        };
+
+        const today = new Date();
+        const todayStr = today.toISOString().split('T')[0];
+        statementDateInput.value = todayStr;
+        updateBillingPeriodText(todayStr);
+        statementDateInput.addEventListener('change', (e) => updateBillingPeriodText(e.target.value));
+
+        const formatNumber = (amount) => new Intl.NumberFormat('zh-TW').format(Math.round(amount));
+        
+        const updateTotals = () => {
+            let mileslinesSubtotal = 0;
+            if (toggleMileslines.checked) {
+                mileslinesTableBody.querySelectorAll('.item-row').forEach(row => {
+                    const quantity = parseFloat(row.querySelector('.quantity').textContent.replace(/,/g, '')) || 0;
+                    const price = parseFloat(row.querySelector('.price').textContent.replace(/,/g, '')) || 0;
+                    const total = quantity * price;
+                    row.querySelector('.total').textContent = formatNumber(total);
+                    mileslinesSubtotal += total;
+                });
+            }
+
+            let toshinTotalTWD = 0;
+            if (toggleToshin.checked) {
+                const exchangeRate = parseFloat(exchangeRateInput.value) || 0;
+                if (rateDisplay) rateDisplay.textContent = exchangeRate.toString();
+                
+                toshinTableBody.querySelectorAll('.item-row').forEach(row => {
+                    const quantity = parseFloat(row.querySelector('.quantity').textContent.replace(/,/g, '')) || 0;
+                    const priceJPY = parseFloat(row.querySelector('.price-jpy').textContent.replace(/,/g, '')) || 0;
+                    const totalJPY = quantity * priceJPY;
+                    const totalTWD = Math.round(totalJPY * exchangeRate);
+                    
+                    row.querySelector('.total-jpy').textContent = formatNumber(totalJPY);
+                    row.querySelector('.total-twd').textContent = formatNumber(totalTWD);
+                    toshinTotalTWD += totalTWD;
+                });
+            }
+            
+            const tax = Math.round(mileslinesSubtotal * 0.05);
+            const mileslinesTotal = mileslinesSubtotal + tax;
+            const grandTotal = mileslinesTotal + toshinTotalTWD;
+
+            document.getElementById('mileslines-subtotal').textContent = formatNumber(mileslinesSubtotal);
+            document.getElementById('tax').textContent = formatNumber(tax);
+            document.getElementById('mileslines-total').textContent = formatNumber(mileslinesTotal);
+            document.getElementById('toshin-total').textContent = formatNumber(toshinTotalTWD);
+            document.getElementById('grand-total').textContent = formatNumber(grandTotal);
+
+        };
+        
+        const createmileslinesItemRow = (date, selectedDesc, qty, price) => {
+            const row = document.createElement('tr');
+            row.classList.add('item-row', 'border-b', 'border-gray-200', 'text-sm');
+            let optionsHtml = mileslinesProductList.map(p => `<option value="${p.description}" data-price="${p.price}">${p.description}</option>`).join('');
+            
+            row.innerHTML = `
+                <td class="p-2 align-top"><input type="date" class="item-date bg-gray-50 border-gray-300 text-gray-900 text-xs rounded-lg p-1 w-full"></td>
+                <td class="p-2 align-top">
+                    <select class="item-select bg-gray-50 border-gray-300 text-gray-900 text-xs rounded-lg p-1 w-full">${optionsHtml}</select>
+                    <input type="text" class="custom-item-input hidden bg-gray-50 border-gray-300 text-gray-900 text-xs rounded-lg p-1 w-full mt-1" placeholder="請輸入自訂品項">
+                </td>
+                <td class="p-2 align-top text-right"><div contenteditable="true" class="quantity">${qty}</div></td>
+                <td class="p-2 align-top"><div class="flex justify-between w-full"><span class="pr-2">NT$</span><div contenteditable="true" class="price text-right flex-grow">${price}</div></div></td>
+                <td class="p-2 align-top"><div class="flex justify-between w-full font-medium text-gray-800"><span class="pr-2">NT$</span><span class="total">0</span></div></td>
+                <td class="p-2 align-top text-center no-print"><button class="remove-item-btn text-red-500 hover:text-red-700 font-bold">✕</button></td>
+            `;
+            row.querySelector('.item-date').value = date;
+            row.querySelector('.item-select').value = selectedDesc;
+            mileslinesTableBody.appendChild(row);
+        };
+
+        const createtoshinItemRow = (date, selectedDesc, qty, priceJPY) => {
+            const row = document.createElement('tr');
+            row.classList.add('item-row', 'border-b', 'border-gray-200', 'text-sm');
+            
+            const groupedByCategory = toshinServiceList.reduce((acc, item) => {
+                const category = item.category || '特殊項目';
+                (acc[category] = acc[category] || []).push(item);
+                return acc;
+            }, {});
+
+            let optionsHtml = '';
+            for (const category in groupedByCategory) {
+                if (category === '特殊項目') continue;
+                optionsHtml += `<optgroup label="${category}">`;
+                const uniqueTypesMap = new Map();
+                groupedByCategory[category].forEach(p => {
+                    const baseDesc = p.item.split('：')[0];
+                    if (!uniqueTypesMap.has(baseDesc)) {
+                        uniqueTypesMap.set(baseDesc, p);
+                    }
+                });
+                uniqueTypesMap.forEach((item, baseDesc) => {
+                    optionsHtml += `<option value="${item.subCategory} > ${baseDesc}" data-price="0">${item.subCategory} > ${baseDesc}</option>`;
+                });
+                optionsHtml += `</optgroup>`;
+            }
+            if (groupedByCategory['特殊項目']) {
+                groupedByCategory['特殊項目'].forEach(p => {
+                    optionsHtml += `<option value="${p.description}" data-price="${p.priceJPY}">${p.description}</option>`;
+                });
+            }
+
+
+            const shippingOptions = ['EMS', 'OCS', 'UPS', 'Fedex', 'DHL'].map(s => `<option value="${s}">${s}</option>`).join('');
+
+            row.innerHTML = `
+                <td class="p-2 align-top"><input type="date" class="item-date bg-gray-50 border-gray-300 text-gray-900 text-xs rounded-lg p-1 w-full"></td>
+                <td class="p-2 align-top">
+                    <select class="item-select bg-gray-50 border-gray-300 text-gray-900 text-xs rounded-lg p-1 w-full">${optionsHtml}</select>
+                    <div class="details-container mt-1 space-y-1">
+                        <input type="text" class="model-input hidden bg-gray-50 border-gray-300 text-gray-900 text-xs rounded-lg p-1 w-full" placeholder="請輸入型號/規格">
+                        <select class="shipping-carrier hidden bg-gray-50 border-gray-300 text-gray-900 text-xs rounded-lg p-1 w-full">${shippingOptions}</select>
+                        <input type="text" class="custom-item-input hidden bg-gray-50 border-gray-300 text-gray-900 text-xs rounded-lg p-1 w-full mt-1" placeholder="請輸入自訂品項">
+                    </div>
+                </td>
+                <td class="p-2 align-top text-right"><div contenteditable="true" class="quantity">${qty}</div></td>
+                <td class="p-2 align-top"><div class="flex justify-between w-full"><span class="pr-2">¥</span><div contenteditable="true" class="price-jpy text-right flex-grow">${priceJPY}</div></div></td>
+                <td class="p-2 align-top"><div class="flex justify-between w-full font-medium text-gray-800"><span class="pr-2">¥</span><span class="total-jpy">0</span></div></td>
+                <td class="p-2 align-top"><div class="flex justify-between w-full font-medium text-gray-800"><span class="pr-2">NT$</span><span class="total-twd">0</span></div></td>
+                <td class="p-2 align-top text-center no-print"><button class="remove-item-btn text-red-500 hover:text-red-700 font-bold">✕</button></td>
+            `;
+            row.querySelector('.item-date').value = date;
+            const selectEl = row.querySelector('.item-select');
+            if (selectEl.querySelector(`option[value="${selectedDesc}"]`)) {
+                 selectEl.value = selectedDesc;
+            } else {
+                 selectEl.selectedIndex = 0;
+            }
+           
+            toshinTableBody.appendChild(row);
+             // Trigger change event to show model input if needed
+            selectEl.dispatchEvent(new Event('change'));
+        };
+        
+        addmileslinesItemBtn.addEventListener('click', () => { createmileslinesItemRow(new Date().toISOString().split('T')[0], mileslinesProductList[0].description, 1, mileslinesProductList[0].price); updateTotals(); });
+        addtoshinItemBtn.addEventListener('click', () => { createtoshinItemRow(new Date().toISOString().split('T')[0], "控制器 > 序列控制器 (PLC)", 1, 0); updateTotals(); });
+        exchangeRateInput.addEventListener('input', updateTotals);
+
+        const updatemileslinesSectionVisibility = () => {
+             mileslinesSection.style.display = toggleMileslines.checked ? 'block' : 'none';
+             updateTotals();
+        };
+
+        const updatetoshinSectionVisibility = () => {
+            const isChecked = toggleToshin.checked;
+            toshinSection.style.display = isChecked ? 'block' : 'none';
+            noteItem1.style.display = isChecked ? 'block' : 'none';
+            noteItem2toshin.style.display = isChecked ? 'inline' : 'none';
+            updateTotals();
+        };
+
+        toggleMileslines.addEventListener('change', updatemileslinesSectionVisibility);
+        toggleToshin.addEventListener('change', updatetoshinSectionVisibility);
+        
+        function setupTableListeners(tableBody) {
+            tableBody.addEventListener('input', (e) => {
+                if (e.target.matches('.quantity, .price, .price-jpy')) {
+                    const originalText = e.target.textContent;
+                    let newText = originalText.replace(/[^0-9,.]/g, '');
+                    e.target.textContent = newText;
+                    if (e.target.textContent !== originalText) {
+                        const range = document.createRange(), sel = window.getSelection();
+                        range.selectNodeContents(e.target);
+                        range.collapse(false);
+                        sel.removeAllRanges();
+                        sel.addRange(range);
+                    }
+                    updateTotals();
+                }
+            });
+
+            tableBody.addEventListener('change', (e) => {
+                if (e.target.matches('.item-select')) {
+                    const select = e.target;
+                    const row = select.closest('.item-row');
+                    const detailsContainer = row.querySelector('.details-container');
+                    const modelInput = detailsContainer?.querySelector('.model-input');
+                    const shippingCarrierSelect = detailsContainer?.querySelector('.shipping-carrier');
+                    const customInput = row.querySelector('.custom-item-input, .details-container .custom-item-input');
+                    const quantityCell = row.querySelector('.quantity');
+                    const priceCell = row.querySelector('.price, .price-jpy');
+                    const selectedOption = select.options[select.selectedIndex];
+                    const price = selectedOption.dataset.price;
+                    
+                    // Reset to default state
+                    if (modelInput) modelInput.classList.add('hidden');
+                    if (shippingCarrierSelect) shippingCarrierSelect.classList.add('hidden');
+                    if(customInput) customInput.classList.add('hidden');
+                    quantityCell.contentEditable = true;
+                    quantityCell.classList.remove('bg-gray-100', 'text-gray-500', 'cursor-not-allowed');
+
+                    if (select.value === '運費') {
+                        if (shippingCarrierSelect) shippingCarrierSelect.classList.remove('hidden');
+                        quantityCell.textContent = '1';
+                        quantityCell.contentEditable = false;
+                        quantityCell.classList.add('bg-gray-100', 'text-gray-500', 'cursor-not-allowed');
+                        priceCell.textContent = '0';
+                        priceCell.focus();
+                    } else if (select.value.includes('自行輸入')) {
+                        if(customInput) customInput.classList.remove('hidden');
+                        customInput.focus();
+                    } else { // Standard item
+                        if(modelInput) modelInput.classList.remove('hidden');
+                        if (priceCell) {
+                            priceCell.textContent = price;
+                        }
+                    }
+                    updateTotals();
+                }
+            });
+
+            tableBody.addEventListener('click', (e) => {
+                if (e.target.classList.contains('remove-item-btn')) {
+                    e.target.closest('.item-row').remove();
+                    updateTotals();
+                }
+            });
+        }
+        
+        setupTableListeners(mileslinesTableBody);
+        setupTableListeners(toshinTableBody);
+
+        // Modal Logic
+        function populateModal() {
+            const grouped = toshinServiceList.reduce((acc, item) => {
+                if(item.category === '特殊項目') return acc;
+                (acc[item.category] = acc[item.category] || {})[item.subCategory] = (acc[item.category][item.subCategory] || []);
+                acc[item.category][item.subCategory].push(item);
+                return acc;
+            }, {});
+            
+            let html = '';
+            for(const category in grouped) {
+                html += `<div class="mb-4"><h3 class="text-lg font-bold text-purple-700 mb-2">${category}</h3>`;
+                html += '<div class="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-2">';
+                for(const subCategory in grouped[category]) {
+                    html += `<div><h4 class="font-semibold text-gray-800">${subCategory}</h4><ul class="list-disc list-inside text-gray-600 text-xs">`;
+                    grouped[category][subCategory].forEach(item => {
+                        html += `<li>${item.item}${item.examples.length > 0 ? ` (${item.examples.join(', ')})` : ''}</li>`;
+                    });
+                    html += `</ul></div>`;
+                }
+                html += '</div></div>';
+            }
+            modalContent.innerHTML = html;
+        }
+
+        viewPartsBtn.addEventListener('click', () => partsModal.style.display = 'flex');
+        closeModalBtn.addEventListener('click', () => partsModal.style.display = 'none');
+        partsModal.addEventListener('click', (e) => {
+            if(e.target === partsModal) {
+                 partsModal.style.display = 'none';
+            }
+        });
+        
+        // Handle number formatting for printing
+        const formatForPrint = () => {
+            document.querySelectorAll('.quantity, .price, .price-jpy').forEach(el => {
+                const rawValue = el.textContent.trim().replace(/,/g, '');
+                el.dataset.originalValue = rawValue; // Store original value
+                const number = parseFloat(rawValue);
+                if (!isNaN(number)) {
+                    el.textContent = new Intl.NumberFormat('zh-TW').format(number);
+                }
+            });
+        };
+
+        const revertAfterPrint = () => {
+            document.querySelectorAll('.quantity, .price, .price-jpy').forEach(el => {
+                if (el.dataset.originalValue !== undefined) {
+                    el.textContent = el.dataset.originalValue;
+                    delete el.dataset.originalValue;
+                }
+            });
+        };
+
+        window.addEventListener('beforeprint', formatForPrint);
+        window.addEventListener('afterprint', revertAfterPrint);
+        
+        // Initial Page Load
+        populateModal();
+        customerSelect.dispatchEvent(new Event('change')); // Set initial customer data
+        updatemileslinesSectionVisibility();
+        updatetoshinSectionVisibility();
+        const initialDate = new Date().toISOString().split('T')[0];
+        createmileslinesItemRow(initialDate, mileslinesProductList[0].description, 1, mileslinesProductList[0].price);
+        createtoshinItemRow(initialDate, "控制器 > 序列控制器 (PLC)", 1, 0);
+        updateTotals();
+    });
+</script>
+<script>
+function validateNonNegative(input) {
+  let errorId = input.id + "-error";
+  let errorElem = document.getElementById(errorId);
+  if (!errorElem) {
+    errorElem = document.createElement("div");
+    errorElem.id = errorId;
+    errorElem.className = "error-message";
+    input.parentNode.insertBefore(errorElem, input.nextSibling);
+  }
+  if (input.value !== "" && parseFloat(input.value) < 0) {
+    input.classList.add("invalid");
+    errorElem.textContent = "請輸入非負數值";
+    errorElem.style.display = "block";
+  } else {
+    input.classList.remove("invalid");
+    errorElem.textContent = "";
+    errorElem.style.display = "none";
+  }
+}
+</script><script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script><script>
+function exportToPDF() {
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF();
+
+    const content = document.body.cloneNode(true);
+    const buttons = content.querySelectorAll('.print-preview-button, .export-pdf-button');
+    buttons.forEach(btn => btn.remove());
+
+    doc.html(content, {
+        callback: function (doc) {
+            doc.save("Customer_Statement.pdf");
+        },
+        x: 10,
+        y: 10,
+        width: 180
+    });
+}
+</script></body>
+</html>
